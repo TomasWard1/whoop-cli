@@ -24,12 +24,13 @@ vi.mock('../tokens.js', () => ({
   getTokenStatus: vi.fn(),
   getValidTokens: vi.fn(),
   isTokenExpired: vi.fn(),
+  refreshAccessToken: vi.fn(),
 }));
 
 // Import after mocks are set up
 import { login, logout, status, refresh } from '../oauth.js';
 import { getCredentials } from '../config.js';
-import { loadTokens, getTokenStatus, getValidTokens } from '../tokens.js';
+import { loadTokens, getTokenStatus, refreshAccessToken } from '../tokens.js';
 import { createInterface } from 'node:readline';
 
 beforeEach(() => {
@@ -116,11 +117,34 @@ describe('refresh', () => {
     });
 
     const { WhoopError, ExitCode } = await import('../../utils/errors.js');
-    vi.mocked(getValidTokens).mockRejectedValue(
+    vi.mocked(refreshAccessToken).mockRejectedValue(
       new WhoopError('Token refresh failed (401)', ExitCode.AUTH_ERROR, 401)
     );
 
     await expect(refresh()).rejects.toThrow('Refresh token expired');
+  });
+
+  it('throws clear re-auth message and logs JSON when refresh returns 400', async () => {
+    vi.mocked(loadTokens).mockReturnValue({
+      access_token: 'old',
+      refresh_token: 'stale-refresh',
+      expires_at: Math.floor(Date.now() / 1000) - 100,
+      token_type: 'bearer',
+      scope: 'offline',
+    });
+
+    const { WhoopError, ExitCode } = await import('../../utils/errors.js');
+    vi.mocked(refreshAccessToken).mockRejectedValue(
+      new WhoopError('invalid_grant', ExitCode.AUTH_ERROR, 400)
+    );
+
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(refresh()).rejects.toThrow('Refresh token is stale or invalid');
+    const output = JSON.parse(consoleSpy.mock.calls[0][0] as string);
+    expect(output.success).toBe(false);
+    expect(output.error).toBe('refresh_token_invalid');
+    expect(output.action).toContain('whoop auth login');
+    consoleSpy.mockRestore();
   });
 
   it('re-throws non-refresh errors as-is', async () => {
@@ -131,7 +155,7 @@ describe('refresh', () => {
       token_type: 'bearer',
       scope: 'offline',
     });
-    vi.mocked(getValidTokens).mockRejectedValue(new Error('Network error'));
+    vi.mocked(refreshAccessToken).mockRejectedValue(new Error('Network error'));
 
     await expect(refresh()).rejects.toThrow('Network error');
   });
@@ -146,7 +170,7 @@ describe('refresh', () => {
     });
 
     const futureExpiry = Math.floor(Date.now() / 1000) + 7200;
-    vi.mocked(getValidTokens).mockResolvedValue({
+    vi.mocked(refreshAccessToken).mockResolvedValue({
       access_token: 'new-access',
       refresh_token: 'new-refresh',
       expires_at: futureExpiry,
