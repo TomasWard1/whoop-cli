@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import open from 'open';
-import { saveTokens, clearTokens, getTokenStatus, getValidTokens, isTokenExpired, loadTokens } from './tokens.js';
+import { saveTokens, clearTokens, getTokenStatus, isTokenExpired, loadTokens, refreshAccessToken } from './tokens.js';
 import { getCredentials as getStoredCredentials, saveConfig } from './config.js';
 import { WhoopError, ExitCode } from '../utils/errors.js';
 import type { OAuthTokenResponse } from '../types/whoop.js';
@@ -202,17 +202,20 @@ export function status(): void {
  */
 export async function refresh(): Promise<void> {
   const tokens = loadTokens();
-  
+
   if (!tokens) {
     throw new WhoopError('Not authenticated. Run: whoop-cli auth login', ExitCode.AUTH_ERROR);
   }
 
   try {
-    const newTokens = await getValidTokens();
-    
+    // Always force a token refresh so the keepalive cron reliably rotates the
+    // single-use refresh token on every run, rather than skipping silently when
+    // the access token still has time remaining.
+    const newTokens = await refreshAccessToken(tokens);
+
     const now = Math.floor(Date.now() / 1000);
     const expiresIn = newTokens.expires_at - now;
-    
+
     console.log(JSON.stringify({
       success: true,
       message: 'Token refreshed successfully',
@@ -221,7 +224,23 @@ export async function refresh(): Promise<void> {
       expires_in_human: `${Math.floor(expiresIn / 60)} minutes`,
     }, null, 2));
   } catch (error) {
-    if (error instanceof WhoopError && error.message.includes('refresh')) {
+    if (error instanceof WhoopError && error.statusCode === 400) {
+      // Stale/invalid refresh token — the rotation chain is broken. Surface a
+      // clear error in the keepalive log so the operator knows manual re-auth is
+      // required rather than retrying forever with the same bad token.
+      console.log(JSON.stringify({
+        success: false,
+        error: 'refresh_token_invalid',
+        message: 'Refresh token is stale or invalid. Manual re-authentication required.',
+        action: 'Run: whoop auth login',
+      }));
+      throw new WhoopError(
+        'Refresh token is stale or invalid. Run: whoop auth login to re-authenticate.',
+        ExitCode.AUTH_ERROR,
+        400
+      );
+    }
+    if (error instanceof WhoopError && error.message.toLowerCase().includes('refresh')) {
       throw new WhoopError(
         'Refresh token expired. Please re-authenticate with: whoop-cli auth login',
         ExitCode.AUTH_ERROR
