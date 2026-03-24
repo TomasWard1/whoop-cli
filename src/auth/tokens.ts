@@ -92,8 +92,23 @@ export async function refreshAccessToken(tokens: TokenData): Promise<TokenData> 
   }
 
   const data = (await response.json()) as OAuthTokenResponse;
+
+  // WHOOP uses single-use refresh token rotation and should always return a new
+  // refresh_token. If it's absent from the response, preserve the existing one to
+  // prevent tokens.json from losing the field (which would cause a 400 on the
+  // next refresh attempt).
+  if (!data.refresh_token) {
+    console.error('[whoop-cli] WARNING: WHOOP did not return a refresh_token in the refresh response — preserving existing token');
+    data.refresh_token = tokens.refresh_token;
+  }
+
   saveTokens(data);
-  return loadTokens()!;
+
+  // Log confirmation so keepalive.log shows exactly what was persisted
+  const saved = loadTokens()!;
+  console.error(`[whoop-cli] tokens saved — expires_at: ${saved.expires_at}, refresh_token: ${saved.refresh_token ? 'present' : 'MISSING'}`);
+
+  return saved;
 }
 
 export async function getValidTokens(): Promise<TokenData> {
