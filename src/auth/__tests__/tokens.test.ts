@@ -140,6 +140,58 @@ describe('refreshAccessToken', () => {
     vi.unstubAllGlobals();
   });
 
+  it('preserves existing refresh_token when response omits it', async () => {
+    process.env.WHOOP_CLIENT_ID = 'test-id';
+    process.env.WHOOP_CLIENT_SECRET = 'test-secret';
+
+    vi.resetModules();
+    vi.mocked(existsSync).mockReturnValue(false);
+    vi.mocked(mkdirSync).mockReturnValue(undefined);
+    vi.mocked(writeFileSync).mockReturnValue(undefined);
+    vi.mocked(chmodSync).mockReturnValue(undefined);
+
+    const mod = await import('../tokens.js');
+
+    // Response without refresh_token (e.g. WHOOP occasionally omitting it)
+    const responseWithoutRefreshToken = {
+      access_token: 'new-access',
+      expires_in: 7200,
+      token_type: 'bearer',
+      scope: 'read:profile offline',
+    };
+
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(responseWithoutRefreshToken),
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    // loadTokens after save returns tokens with preserved refresh_token
+    vi.mocked(existsSync).mockReturnValue(true);
+    const savedTokens: TokenData = {
+      access_token: 'new-access',
+      refresh_token: 'refresh-456', // preserved from original validTokens
+      expires_at: Math.floor(Date.now() / 1000) + 7200,
+      token_type: 'bearer',
+      scope: 'read:profile offline',
+    };
+    vi.mocked(readFileSync).mockReturnValue(JSON.stringify(savedTokens));
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await mod.refreshAccessToken(validTokens);
+
+    // The saved data must include the existing refresh_token (not undefined)
+    const written = vi.mocked(writeFileSync).mock.calls[0]?.[1] as string;
+    const parsed = JSON.parse(written);
+    expect(parsed.refresh_token).toBe('refresh-456');
+    expect(result.access_token).toBe('new-access');
+    // Warning should be logged
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('WARNING'));
+
+    consoleSpy.mockRestore();
+    vi.unstubAllGlobals();
+  });
+
   it('saves refreshed tokens on success', async () => {
     process.env.WHOOP_CLIENT_ID = 'test-id';
     process.env.WHOOP_CLIENT_SECRET = 'test-secret';
