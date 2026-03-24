@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import open from 'open';
-import { saveTokens, clearTokens, getTokenStatus, getValidTokens, isTokenExpired, loadTokens, refreshAccessToken } from './tokens.js';
+import { saveTokens, clearTokens, getTokenStatus, isTokenExpired, loadTokens, refreshAccessToken } from './tokens.js';
 import { getCredentials as getStoredCredentials, saveConfig } from './config.js';
 import { WhoopError, ExitCode } from '../utils/errors.js';
 import type { OAuthTokenResponse } from '../types/whoop.js';
